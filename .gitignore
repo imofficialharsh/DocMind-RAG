@@ -1,0 +1,46 @@
+# Environment variables and secrets (CRITICAL: Never commit API keys)
+.env
+.env.local
+.env.*.local
+*.env
+.streamlit/secrets.toml
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Bytecode & Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# DocMind Transient Runtime & Index Data
+data/chroma_db/
+data/bm25/
+data/cache/
+data/sample_docs/
+*.sqlite3
+*.sqlite3-journal
+*.pkl
+
+# Operating System & IDE files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.agent/
