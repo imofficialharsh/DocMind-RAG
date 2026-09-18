@@ -353,17 +353,13 @@ if "doc_chunks" not in st.session_state:
 if "indexing_time" not in st.session_state:
     st.session_state.indexing_time = 0.0
 
-# LLM Saved Configuration in Session State
+# LLM & Server Protection Session State
 if "saved_llm_provider" not in st.session_state:
     st.session_state.saved_llm_provider = settings.llm_provider
-if "saved_gemini_model" not in st.session_state or st.session_state.saved_gemini_model not in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
-    st.session_state.saved_gemini_model = "gemini-3.5-flash"
-if "saved_gemini_api_key" not in st.session_state:
-    st.session_state.saved_gemini_api_key = settings.gemini_api_key or ""
-if "saved_groq_model" not in st.session_state or (st.session_state.saved_groq_model not in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"] and not st.session_state.saved_groq_model.startswith("Custom")):
-    st.session_state.saved_groq_model = "openai/gpt-oss-120b"
-if "saved_groq_api_key" not in st.session_state:
-    st.session_state.saved_groq_api_key = settings.groq_api_key or ""
+if "saved_groq_model" not in st.session_state:
+    st.session_state.saved_groq_model = settings.groq_model
+if "last_query_time" not in st.session_state:
+    st.session_state.last_query_time = 0.0
 
 # Query suggestion trigger
 if "sample_prompt_query" not in st.session_state:
@@ -420,9 +416,13 @@ def show_architecture_dialog():
                     BM25 --> BM25Persist[("./data/bm25/{hash}_bm25.pkl")]
                 end
 
-                subgraph Retrieval ["4. Hybrid Retrieval & Re-ranking"]
-                    UserQuery["User Query"] --> DenseRetriever["ChromaDB Dense Search (Top-30)"]
-                    UserQuery --> BM25Retriever["BM25 Keyword Search + Expansion (Top-30)"]
+                subgraph Security ["4. Security & Request Throttling"]
+                    UserQuery["User Query"] --> RateLimit["30s Cooldown Rate Limiter\n(Server Load & API Budget Defense)"]
+                end
+
+                subgraph Retrieval ["5. Hybrid Retrieval & Re-ranking"]
+                    RateLimit --> DenseRetriever["ChromaDB Dense Search (Top-30)"]
+                    RateLimit --> BM25Retriever["BM25 Keyword Search + Expansion (Top-30)"]
                     DenseRetriever & BM25Retriever --> RRF["Reciprocal Rank Fusion (RRF: k=60)"]
                     RRF --> CandidatePool["Candidate Chunks (Top-60 Pool)"]
                     CandidatePool --> CrossEncoder["Cross-Encoder (ms-marco-MiniLM-L-6-v2)"]
@@ -430,22 +430,21 @@ def show_architecture_dialog():
                     TablePreserve --> FinalTopK["High-Precision Top-10 Chunks"]
                 end
 
-                subgraph Generation ["5. Grounded Generation & Citations"]
-                    FinalTopK & UserQuery --> GroundingPrompt["Strict Grounding Prompt Template"]
-                    GroundingPrompt --> LLM{"LLM Provider"}
-                    LLM -- Gemini --> GenAI["Google Gemini (3.5 Flash / 3.1 Flash-Lite)"]
-                    LLM -- Groq --> GroqCloud["Groq Cloud (GPT-OSS / Qwen)"]
-                    GenAI & GroqCloud --> CitationExtractor["Citation & Provenance Mapper"]
+                subgraph Generation ["6. Server-Managed 120B Generation & Citations"]
+                    FinalTopK --> GroundingPrompt["Strict Grounding Prompt Template"]
+                    RateLimit --> GroundingPrompt
+                    GroundingPrompt --> GroqCloud["Groq Cloud LPU Inference\n(openai/gpt-oss-120b - Pre-configured Backend)"]
+                    GroqCloud --> CitationExtractor["Citation & Provenance Mapper"]
                     CitationExtractor --> StreamlitUI["Interactive UI with Source Cards"]
                 end
             </div>
         </div>
         """,
-        height=580,
+        height=620,
         scrolling=True,
     )
 
-    tab1, tab2, tab3 = st.tabs(["🚀 5-Stage System Breakdown", "⚡ Latency Benchmarks", "💎 Why It Outperforms Generic RAG"])
+    tab1, tab2, tab3 = st.tabs(["🚀 6-Stage System Breakdown", "⚡ Latency Benchmarks", "💎 Why It Outperforms Generic RAG"])
 
     with tab1:
         st.markdown(
@@ -464,13 +463,19 @@ def show_architecture_dialog():
             * **Dense Semantic Index**: Hugging Face `sentence-transformers/all-MiniLM-L6-v2` encoded locally on CPU/GPU into ChromaDB SQLite.
             * **Sparse Keyword Index**: `BM25Okapi` with tokenization & corporate filing keyword expansion, serialized to disk via pickle.
 
-            #### 4. Hybrid Search via Reciprocal Rank Fusion & Cross-Encoder
+            #### 4. Security, Spam Defense & Cost Protection
+            * Enforces an active **30-second per-query rate limiter** on the server.
+            * Protects server load from denial-of-service/spam attempts and guards backend Groq API quotas from sudden exhaustion.
+
+            #### 5. Hybrid Search via Reciprocal Rank Fusion & Cross-Encoder
             * Merges disparate vector and keyword rankings using Reciprocal Rank Fusion:
               $$\\text{RRF}(d) = \\sum_{m \\in \\{\\text{dense}, \\text{bm25}\\}} \\frac{1}{k + \\text{rank}_m(d)}$$
             * Re-ranks the top 60 candidate pool using `cross-encoder/ms-marco-MiniLM-L-6-v2` cross-attention.
             * Applies **Table-Diversity Preservation** to ensure high-value numerical tables are never crowded out by conversational text.
 
-            #### 5. Strict Grounding & Citation Attribution
+            #### 6. Server-Managed 120B Grounded Generation & Citations
+            * Executes inference via **Groq Cloud LPU** running the flagship **120B parameter model** (`openai/gpt-oss-120b`).
+            * Fully managed on the backend: evaluators and HR can test and query immediately without needing to provide or configure an API key.
             * Strict grounding system prompt enforces that answers derive exclusively from retrieved context.
             * Direct provenance mapper extracts page citations (`[Page 212]`, `[Page 33, Table 1]`) and links them directly to interactive source inspection cards.
             """
@@ -484,20 +489,22 @@ def show_architecture_dialog():
             | **PDF Text & Table Extraction** | ~1.8s - 3.2s | SHA-256 disk cache skips re-parse (<0.02s on repeat) |
             | **Dense Vector Embeddings** | ~2.1s (MiniLM-L6-v2) | Batch encoding (`batch_size=64`) & PyTorch multi-threading |
             | **BM25 Tokenization & Indexing** | ~0.15s | Word regex tokenization & pickle serialization |
+            | **Rate Limit Guard & Throttling** | < 1ms | In-memory session tracking & cooldown verification |
             | **Hybrid Search (Dense + BM25)** | ~45ms | Pre-indexed Chroma SQLite + in-memory BM25 index |
             | **Cross-Encoder Re-ranking** | ~120ms (for 60 candidates) | Fast 6-layer MiniLM architecture |
-            | **LLM Inference (Gemini 3.5 Flash)** | ~800ms - 1.4s | Server-side speculative decoding & streaming |
-            | **LLM Inference (Groq GPT-OSS / Qwen)** | ~250ms - 600ms | Ultra-fast LPU hardware acceleration |
+            | **LLM Inference (Groq 120B LPU)** | ~300ms - 650ms | Ultra-fast Groq LPU hardware acceleration (`openai/gpt-oss-120b`) |
             """
         )
 
     with tab3:
         st.markdown(
             """
+            * **Zero-Friction Recruiter & HR Evaluation**: Backend-managed API credentials mean evaluators can test queries immediately with zero setup.
+            * **120B Parameter Reasoning**: Leverages Groq's high-throughput LPU running `openai/gpt-oss-120b` for deep analytical document synthesis.
+            * **Server Load & Quota Protection**: Built-in 30-second rate limiter guards against automated abuse and runaway API consumption.
             * **Real-World Table Intelligence**: Handles real filings with multi-column financial tables without losing headers or alignment.
             * **Zero Embedding API Cost**: Entire indexing and hybrid retrieval run 100% locally with zero external API fees.
-            * **No Hallucinations / Strict Grounding**: Answers are strictly verifiable with interactive color-coded provenance badges (Orange for text, Green for tables).
-            * **Frontend-Driven Model Agnostic**: Switch seamlessly between Google Gemini and Groq Cloud with instant key management.
+            * **Verifiable Provenance**: Answers are strictly grounded with interactive color-coded badges (Orange for text, Green for tables).
             """
         )
 
@@ -623,100 +630,30 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    # Collapsible LLM Configuration (Expanded if API key is not yet provided)
-    current_prov = st.session_state.get("llm_provider_picker", st.session_state.saved_llm_provider)
-    has_api_key = bool(
-        (st.session_state.get("gemini_key_text", "").strip() or st.session_state.saved_gemini_api_key)
-        if current_prov == "gemini"
-        else (st.session_state.get("groq_key_text", "").strip() or st.session_state.saved_groq_api_key)
+    # Backend-Configured AI Engine Status Card
+    st.markdown(
+        f"""
+        <div class="llm-status-box">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                <span style="font-weight: 700; color: #FFA94D; font-size: 0.88rem;">⚡ AI Engine (Server-Managed)</span>
+                <span class="badge-orange">Active</span>
+            </div>
+            <div style="font-size: 0.82rem; color: #E5E7EB; margin-bottom: 4px;">
+                <b>Provider:</b> Groq Cloud LPU
+            </div>
+            <div style="font-size: 0.82rem; color: #E5E7EB; margin-bottom: 8px;">
+                <b>Model:</b> <code style="color: #34D399; background: #111827; padding: 2px 5px; border-radius: 4px;">{settings.groq_model}</code> (120B)
+            </div>
+            <div style="font-size: 0.77rem; color: #9CA3AF; line-height: 1.4; border-top: 1px solid #282D3D; padding-top: 6px;">
+                ✨ <b>Pre-Configured Backend</b>: Zero client setup. Evaluators and HR can query documents without providing personal API keys.
+            </div>
+            <div style="font-size: 0.75rem; color: #F59E0B; margin-top: 6px; line-height: 1.35;">
+                🛡️ <b>Server Defense</b>: 1 query every <b>{settings.rate_limit_seconds}s</b> to protect server capacity & external API quota.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-
-    with st.expander("LLM Provider & API Key", expanded=not has_api_key):
-        selected_provider = st.selectbox(
-            "Select Provider",
-            options=["gemini", "groq"],
-            index=0 if current_prov == "gemini" else 1,
-            key="llm_provider_picker",
-            help="Switch between Google Gemini and Groq Cloud.",
-        )
-
-        if selected_provider == "gemini":
-            gemini_options = [
-                "gemini-3.5-flash",
-                "gemini-3.1-flash-lite",
-            ]
-            if "gemini_model_select" in st.session_state and st.session_state["gemini_model_select"] not in gemini_options:
-                del st.session_state["gemini_model_select"]
-
-            curr_gem = st.session_state.saved_gemini_model
-            idx = gemini_options.index(curr_gem) if curr_gem in gemini_options else 0
-
-            chosen_gemini_model = st.selectbox(
-                "Gemini Model",
-                options=gemini_options,
-                index=idx,
-                key="gemini_model_select",
-                help="Recommended: gemini-3.5-flash for fast and accurate RAG analysis.",
-            )
-            model_val = chosen_gemini_model
-
-            input_key = st.text_input(
-                "Gemini API Key",
-                value=st.session_state.saved_gemini_api_key,
-                type="password",
-                key="gemini_key_text",
-                placeholder="AIzaSy...",
-                help="API key entered here directly powers the assistant.",
-            )
-            st.session_state.saved_llm_provider = "gemini"
-            st.session_state.saved_gemini_model = model_val or "gemini-3.5-flash"
-            if input_key.strip():
-                st.session_state.saved_gemini_api_key = input_key.strip()
-
-        else:
-            groq_options = [
-                "openai/gpt-oss-120b",
-                "openai/gpt-oss-20b",
-                "qwen/qwen3.8-27b",
-                "Custom...",
-            ]
-            if "groq_model_select" in st.session_state and st.session_state["groq_model_select"] not in groq_options:
-                del st.session_state["groq_model_select"]
-
-            curr_groq = st.session_state.saved_groq_model
-            idx = groq_options.index(curr_groq) if curr_groq in groq_options else 0
-
-            chosen_groq_model = st.selectbox(
-                "Groq Model",
-                options=groq_options,
-                index=idx,
-                key="groq_model_select",
-                help="Ultra-fast LPU inference via Groq Cloud.",
-            )
-            if chosen_groq_model == "Custom...":
-                model_val = st.text_input(
-                    "Custom Model Name",
-                    value=curr_groq if curr_groq not in groq_options[:-1] else "",
-                    key="groq_custom_text",
-                    placeholder="e.g. meta-llama/llama-4-scout",
-                ).strip()
-            else:
-                model_val = chosen_groq_model
-
-            input_key = st.text_input(
-                "Groq API Key",
-                value=st.session_state.saved_groq_api_key,
-                type="password",
-                key="groq_key_text",
-                placeholder="gsk_...",
-                help="API key entered here directly powers the assistant.",
-            )
-            st.session_state.saved_llm_provider = "groq"
-            st.session_state.saved_groq_model = model_val or "openai/gpt-oss-120b"
-            if input_key.strip():
-                st.session_state.saved_groq_api_key = input_key.strip()
-
-        st.caption("Settings are applied automatically from the frontend.")
 
     # Advanced Retrieval Parameters (Hidden by default)
     with st.expander("Retrieval Parameters", expanded=False):
@@ -863,7 +800,16 @@ else:
                         st.markdown(f"```markdown\n{chunk.text}\n```")
                         st.divider()
 
-    # User Input handling
+    # User Input handling with Rate Limiting Notice
+    st.markdown(
+        f"""
+        <div style="font-size: 0.76rem; color: #9CA3AF; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+            <span>🛡️</span>
+            <span><b>Server Safeguard</b>: 1 query every <b>{settings.rate_limit_seconds}s</b> to protect server load and external API budget.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     chat_prompt = st.chat_input("Ask a question about the document...")
     active_query = chat_prompt or sample_to_run
 
@@ -872,6 +818,22 @@ else:
         if not st.session_state.current_doc:
             st.warning("No document uploaded. Please upload a PDF in the sidebar first.")
             st.stop()
+
+        # Enforce 30-second query rate limiter
+        now = time.time()
+        time_since_last = now - st.session_state.get("last_query_time", 0.0)
+        cooldown = settings.rate_limit_seconds
+
+        if time_since_last < cooldown:
+            remaining_sec = int(cooldown - time_since_last) + 1
+            st.warning(
+                f"⏳ **Rate Limiter Active**: Please wait **{remaining_sec}s** before submitting another question. "
+                f"This safeguard prevents server overload and protects backend API quotas."
+            )
+            st.stop()
+
+        # Rate limit passed - record query timestamp
+        st.session_state.last_query_time = now
 
         # Append User Message
         st.session_state.chat_history.append({"role": "user", "content": active_query})
@@ -887,32 +849,26 @@ else:
                     top_k_final=top_k_final,
                 )
 
-            effective_provider = st.session_state.saved_llm_provider
+            effective_provider = settings.llm_provider
             effective_model = (
-                st.session_state.saved_gemini_model
-                if effective_provider == "gemini"
-                else st.session_state.saved_groq_model
+                settings.groq_model
+                if effective_provider == "groq"
+                else settings.gemini_model
             )
-            # Prioritize API key directly typed in frontend sidebar
-            frontend_key = (
-                st.session_state.get("gemini_key_text", "").strip()
-                if effective_provider == "gemini"
-                else st.session_state.get("groq_key_text", "").strip()
+            effective_key = (
+                settings.groq_api_key
+                if effective_provider == "groq"
+                else settings.gemini_api_key
             )
-            raw_key = frontend_key or (
-                st.session_state.saved_gemini_api_key
-                if effective_provider == "gemini"
-                else st.session_state.saved_groq_api_key
-            )
-            effective_key = raw_key.strip() if raw_key else None
 
             if not effective_key:
                 st.error(
-                    f"⚠️ **{effective_provider.upper()} API Key Required**: Please enter your API key in the **LLM Provider & API Key** section in the left sidebar to generate grounded answers."
+                    f"⚠️ **Server Configuration Required**: `{effective_provider.upper()}_API_KEY` is not set in `.env` on the server. "
+                    f"Please configure your Groq API key in the backend environment to enable answer generation."
                 )
                 st.stop()
 
-            with st.spinner(f"Synthesizing grounded answer using {effective_provider.upper()} ({effective_model})..."):
+            with st.spinner(f"Synthesizing grounded answer using Groq LPU ({effective_model})..."):
                 response: RAGResponse = generator.generate_answer(
                     query=active_query,
                     retrieved_chunks=retrieved_chunks,

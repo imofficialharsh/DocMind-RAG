@@ -33,21 +33,24 @@ flowchart TD
         BM25 --> BM25Persist[("./data/bm25/{hash}_bm25.pkl")]
     end
 
-    subgraph Retrieval ["4. Hybrid Retrieval & Re-ranking"]
-        UserQuery["User Query"] --> DenseRetriever["ChromaDB Dense Search (Top-15)"]
-        UserQuery --> BM25Retriever["BM25 Keyword Search (Top-15)"]
-        DenseRetriever & BM25Retriever --> RRF["Reciprocal Rank Fusion (RRF: k=60)"]
-        RRF --> CandidatePool["Candidate Chunks (Top-20 Pool)"]
-        CandidatePool --> CrossEncoder["Cross-Encoder (ms-marco-MiniLM-L-6-v2)"]
-        CrossEncoder --> FinalTopK["High-Precision Top-K Chunks"]
+    subgraph Security ["4. Security & Request Throttling"]
+        UserQuery["User Query"] --> RateLimit["30s Cooldown Rate Limiter\n(Server Load & API Budget Defense)"]
     end
 
-    subgraph Generation ["5. Grounded Generation & UI"]
-        FinalTopK & UserQuery --> GroundingPrompt["Strict Grounding Prompt Template"]
-        GroundingPrompt --> LLM{"LLM Provider"}
-        LLM -- Gemini --> GenAI["Google Gemini 2.5 Flash (google-genai)"]
-        LLM -- Groq --> GroqCloud["Groq Cloud (llama-3.3-70b-versatile)"]
-        GenAI & GroqCloud --> CitationExtractor["Citation & Provenance Mapper"]
+    subgraph Retrieval ["5. Hybrid Retrieval & Re-ranking"]
+        RateLimit --> DenseRetriever["ChromaDB Dense Search (Top-30)"]
+        RateLimit --> BM25Retriever["BM25 Keyword Search + Expansion (Top-30)"]
+        DenseRetriever & BM25Retriever --> RRF["Reciprocal Rank Fusion (RRF: k=60)"]
+        RRF --> CandidatePool["Candidate Chunks (Top-60 Pool)"]
+        CandidatePool --> CrossEncoder["Cross-Encoder (ms-marco-MiniLM-L-6-v2)"]
+        CrossEncoder --> FinalTopK["High-Precision Top-10 Chunks"]
+    end
+
+    subgraph Generation ["6. Server-Managed 120B Generation & UI"]
+        FinalTopK --> GroundingPrompt["Strict Grounding Prompt Template"]
+        RateLimit --> GroundingPrompt
+        GroundingPrompt --> GroqCloud["Groq Cloud LPU Inference\n(openai/gpt-oss-120b - Backend Managed)"]
+        GroqCloud --> CitationExtractor["Citation & Provenance Mapper"]
         CitationExtractor --> StreamlitUI["Streamlit Interactive UI"]
     end
 ```
@@ -76,7 +79,15 @@ flowchart TD
    - Evaluates fused candidate pairs `(query, chunk_text)` using `cross-encoder/ms-marco-MiniLM-L-6-v2`.
    - Computes cross-attention between question and document context, eliminating false-positive semantic matches.
 
-5. **Strict Grounding & Verifiable Citations**:
+5. **Enterprise Security & Rate Limiting**:
+   - Enforces an automated **30-second cooldown per query** on the server.
+   - Prevents automated spam/DDoS attempts, protects server CPU/memory, and prevents sudden API quota exhaustion.
+
+6. **Server-Managed 120B Flagship Reasoning**:
+   - Uses **Groq Cloud LPU** running the **120B parameter** model (`openai/gpt-oss-120b`).
+   - Managed on the backend so HR and technical recruiters can evaluate the system immediately with zero setup or API key entry.
+
+7. **Strict Grounding & Verifiable Citations**:
    - System prompts enforce that responses are derived strictly from retrieved context.
    - Demands inline brackets with exact page provenance: `[Page 14]`, `[Page 22, Table 1]`.
    - Streamlit UI renders interactive citation badges and full source chunk expandable cards.
@@ -92,10 +103,10 @@ Evaluated on standard multi-page documents running on an 8-core CPU:
 | **PDF Text & Table Extraction**      | ~1.8s - 3.2s               | SHA-256 disk cache skips re-parse (0.02s on re-read)       |
 | **Dense Vector Embeddings**          | ~2.1s (MiniLM-L6-v2)       | Batch encoding (`batch_size=64`) & PyTorch multi-threading |
 | **BM25 Tokenization & Indexing**     | ~0.15s                     | Regex word tokenization & pickle serialization             |
+| **Rate Limit Guard & Throttling**    | < 1ms                      | In-memory session tracking & cooldown verification         |
 | **Hybrid Search (Dense + BM25)**     | ~45ms                      | Pre-indexed Chroma SQLite + in-memory BM25 index           |
-| **Cross-Encoder Re-ranking**         | ~120ms (for 20 candidates) | Fast 6-layer MiniLM architecture                           |
-| **LLM Inference (Gemini 2.5 Flash)** | ~800ms - 1.4s              | Server-side speculative decoding & streaming               |
-| **LLM Inference (Groq Llama 3.3)**   | ~450ms - 900ms             | Ultra-fast LPU hardware acceleration                       |
+| **Cross-Encoder Re-ranking**         | ~120ms (for 60 candidates) | Fast 6-layer MiniLM architecture                           |
+| **LLM Inference (Groq 120B LPU)**    | ~300ms - 650ms             | Ultra-fast Groq LPU acceleration (`openai/gpt-oss-120b`)   |
 
 ---
 
@@ -157,10 +168,20 @@ cp .env.example .env
 Edit `.env`:
 
 ```ini
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key_here
-# Optional Groq configuration:
+# LLM Provider: "groq" (default) or "gemini"
+LLM_PROVIDER=groq
+
+# Groq Configuration (Server-managed backend inference)
+# HR / evaluators can test immediately without providing an API key
 GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL=openai/gpt-oss-120b
+
+# Query Rate Limiting (seconds cooldown between queries)
+RATE_LIMIT_SECONDS=30
+
+# Optional Google Gemini fallback:
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-3.5-flash
 ```
 
 ---

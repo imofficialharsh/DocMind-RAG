@@ -102,7 +102,7 @@ class GroundedGenerator:
         key = api_key or self.settings.gemini_api_key
         if not key:
             raise ValueError(
-                "GEMINI_API_KEY is not set. Please provide it in the sidebar."
+                "GEMINI_API_KEY is not set. Please configure GEMINI_API_KEY in the server environment (.env)."
             )
 
         from google import genai
@@ -124,7 +124,7 @@ class GroundedGenerator:
         key = api_key or self.settings.groq_api_key
         if not key:
             raise ValueError(
-                "GROQ_API_KEY is not set. Please provide it in the sidebar."
+                "GROQ_API_KEY is not set. Please configure GROQ_API_KEY in the server environment (.env)."
             )
 
         from groq import Groq
@@ -191,7 +191,7 @@ class GroundedGenerator:
             answer_text = (
                 f"**Inference Error**: Could not complete generation using {chosen_provider}.\n"
                 f"Details: {str(e)}\n\n"
-                f"*Please verify your API key in the sidebar.*"
+                f"*Please verify the backend API key configuration in .env.*"
             )
 
         latency = time.time() - start_time

@@ -18,9 +18,17 @@ class AppSettings(BaseSettings):
     )
 
     # LLM Provider Configuration
-    llm_provider: Literal["gemini", "groq"] = Field(
-        default="gemini",
-        description="LLM provider: 'gemini' (Google GenAI) or 'groq'.",
+    llm_provider: Literal["groq", "gemini"] = Field(
+        default="groq",
+        description="LLM provider: 'groq' (default) or 'gemini'.",
+    )
+    groq_api_key: Optional[str] = Field(
+        default=None,
+        description="API key for Groq Cloud (configured on backend).",
+    )
+    groq_model: str = Field(
+        default="openai/gpt-oss-120b",
+        description="Groq model identifier (120B parameter model).",
     )
     gemini_api_key: Optional[str] = Field(
         default=None,
@@ -29,14 +37,6 @@ class AppSettings(BaseSettings):
     gemini_model: str = Field(
         default="gemini-3.5-flash",
         description="Google Gemini model identifier.",
-    )
-    groq_api_key: Optional[str] = Field(
-        default=None,
-        description="API key for Groq Cloud.",
-    )
-    groq_model: str = Field(
-        default="openai/gpt-oss-120b",
-        description="Groq model identifier.",
     )
 
     # Local Embeddings & Reranker
@@ -95,6 +95,12 @@ class AppSettings(BaseSettings):
     top_k_final: int = Field(
         default=10,
         description="Final number of top chunks delivered to LLM after re-ranking.",
+    )
+
+    # API Protection & Rate Limiting
+    rate_limit_seconds: int = Field(
+        default=30,
+        description="Minimum cooldown in seconds between consecutive user queries to protect server load and API quota.",
     )
 
     def ensure_directories(self) -> None:
