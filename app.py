@@ -861,10 +861,21 @@ else:
                 else settings.gemini_api_key
             )
 
+            # Fallback to Streamlit Cloud secrets if available
+            if not effective_key:
+                try:
+                    if effective_provider == "groq" and "GROQ_API_KEY" in st.secrets:
+                        effective_key = str(st.secrets["GROQ_API_KEY"])
+                    elif effective_provider == "gemini" and "GEMINI_API_KEY" in st.secrets:
+                        effective_key = str(st.secrets["GEMINI_API_KEY"])
+                except Exception:
+                    pass
+
             if not effective_key:
                 st.error(
-                    f"⚠️ **Server Configuration Required**: `{effective_provider.upper()}_API_KEY` is not set in `.env` on the server. "
-                    f"Please configure your Groq API key in the backend environment to enable answer generation."
+                    f"⚠️ **Configuration Required**: `{effective_provider.upper()}_API_KEY` is not configured.\n\n"
+                    f"- **On Streamlit Cloud**: Go to **Manage App → Settings → Secrets** and add `{effective_provider.upper()}_API_KEY = \"your_api_key\"`.\n"
+                    f"- **Locally**: Ensure `{effective_provider.upper()}_API_KEY` is present in your `.env` file."
                 )
                 st.stop()
 

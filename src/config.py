@@ -114,6 +114,24 @@ class AppSettings(BaseSettings):
 def get_settings() -> AppSettings:
     """Return a singleton cached instance of AppSettings."""
     settings = AppSettings()
+
+    # Seamless Streamlit Cloud Secrets integration
+    try:
+        import streamlit as st
+
+        if hasattr(st, "secrets"):
+            if not settings.groq_api_key and "GROQ_API_KEY" in st.secrets:
+                settings.groq_api_key = str(st.secrets["GROQ_API_KEY"])
+            if not settings.gemini_api_key and "GEMINI_API_KEY" in st.secrets:
+                settings.gemini_api_key = str(st.secrets["GEMINI_API_KEY"])
+            if "LLM_PROVIDER" in st.secrets and st.secrets["LLM_PROVIDER"] in (
+                "groq",
+                "gemini",
+            ):
+                settings.llm_provider = st.secrets["LLM_PROVIDER"]
+    except Exception:
+        pass
+
     settings.ensure_directories()
     return settings
 
