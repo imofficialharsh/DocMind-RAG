@@ -1,0 +1,33 @@
+name: Keep Streamlit App Awake
+
+on:
+  schedule:
+    # Runs every 8 hours (00:00, 08:00, 16:00 UTC)
+    - cron: '0 */8 * * *'
+  workflow_dispatch: # Allows manual trigger anytime from the GitHub Actions UI
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Playwright & Chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install chromium --with-deps
+
+      - name: Run Playwright Keep-Alive Probe
+        env:
+          # Priority: GitHub Repo Variable > GitHub Secret > Direct fallback URL
+          STREAMLIT_APP_URL: ${{ vars.STREAMLIT_APP_URL || secrets.STREAMLIT_APP_URL || 'https://ragdocmind.streamlit.app/' }}
+        run: |
+          python scripts/keep_alive.py
